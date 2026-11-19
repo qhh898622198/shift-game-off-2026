@@ -17,7 +17,7 @@ import { AudioSystem } from "./audio";
 import { storage } from "./storage";
 import { Pool, type Poolable } from "./types";
 import {
-  loadLevel, mapTitle, mapFlatIndex, totalMaps, totalShards, TILE, LEVEL_W, LEVEL_H, LEVEL_PX_W, LEVEL_PX_H,
+  loadLevel, mapTitle, mapFlatIndex, totalMaps, flatToLevelMap, totalShards, TILE, LEVEL_W, LEVEL_H, LEVEL_PX_W, LEVEL_PX_H,
   type WorldId, type LevelData,
 } from "./level";
 
@@ -59,8 +59,11 @@ const SAN_REGEN = 30;
 
 const MOVER_H = 14;
 const SAVE_KEY = "shift.save";
+const PROGRESS_KEY = "shift.progress";
 
 interface SaveData { l: number; m: number; grand: number; time: number }
+/** 选关制进度：unlocked = 已解锁的最大图序号（0 起），masks[i] = 该图碎片位掩码（0-7） */
+interface Progress { unlocked: number; masks: number[] }
 
 const PAL = {
   A: {
@@ -151,7 +154,8 @@ export class Game {
   private endKind: EndKind = "win";
   private best = storage.get<number>("shift.bestTime", 0);
   private save: SaveData | null = storage.get<SaveData | null>(SAVE_KEY, null);
-
+  private progress: Progress = storage.get<Progress>(PROGRESS_KEY, { unlocked: 0, masks: Array(totalMaps()).fill(0) });
+  private selectIdx = 0;
   private camX = 0;
   private particles = new Pool<Particle>(() => new Particle(), 240);
   private hints: Hint[] = [];
@@ -206,11 +210,12 @@ export class Game {
     return (this.vh - LEVEL_PX_H) / 2;
   }
 
-  probe(): { x: number; y: number; z: number; world: WorldId; state: string; san: number; moverX: number; timeScale: number; level: number; map: number; vw: number; vh: number } {
+  probe(): { x: number; y: number; z: number; world: WorldId; state: string; san: number; moverX: number; timeScale: number; level: number; map: number; vw: number; vh: number; unlocked: number } {
     return {
       x: this.px, y: this.py, z: 0, world: this.world, state: this.sm.state,
       san: this.san, moverX: this.movers[0]?.pos ?? 0, timeScale: this.slowmo ? SLOWMO_SCALE : 1,
       level: this.levelIndex, map: this.mapIndex, vw: this.vw, vh: this.vh,
+      unlocked: this.progress.unlocked,
     };
   }
 
@@ -223,6 +228,10 @@ export class Game {
 
   debugGiveKey(): void { this.hasKey = true; this.keyTaken = true; }
   debugSetSan(v: number): void { this.san = v; }
+  /** 自检专用：直接拉开全部拉杆（巡逻区时序敏感的拉杆点）。 */
+  debugPullLevers(): void {
+    this.leversPulled = this.level.levers.map(() => true);
+  }
 
   // ---------------------------------------------------------------- 流程与存档
 
@@ -231,31 +240,48 @@ export class Game {
     storage.set(SAVE_KEY, this.save);
   }
 
+  private writeProgress(): void {
+    storage.set(PROGRESS_KEY, this.progress);
+  }
+
+  /** 本图在选关网格里的序号。 */
+  private get flatIdx(): number {
+    return mapFlatIndex(this.levelIndex, this.mapIndex);
+  }
+
   private clearSave(): void {
     this.save = null;
     storage.remove(SAVE_KEY);
   }
 
+  /** 全新一夜：清掉进度，从第一关开始选关。 */
   private newGame(): void {
     this.clearSave();
-    this.levelIndex = 0;
-    this.mapIndex = 0;
-    this.level = loadLevel(0, 0);
-    this.time = 0;
-    this.shardsGrand = 0;
-    this.resetMapState(false);
-    this.briefT = 2.8;
+    this.progress = { unlocked: 0, masks: Array(totalMaps()).fill(0) };
+    this.writeProgress();
+    this.selectIdx = 0;
+    this.startMap(0);
   }
 
-  private continueGame(): void {
-    if (!this.save) return this.newGame();
-    this.levelIndex = this.save.l;
-    this.mapIndex = this.save.m;
-    this.level = loadLevel(this.levelIndex, this.mapIndex);
-    this.time = this.save.time;
-    this.shardsGrand = this.save.grand;
+  /** 从选关进入某图。 */
+  private startMap(flat: number): void {
+    const { level, map } = flatToLevelMap(flat);
+    this.input.actions.clear();
+    this.levelIndex = level;
+    this.mapIndex = map;
+    this.level = loadLevel(level, map);
+    this.time = this.save?.time ?? 0;
+    this.shardsGrand = this.progress.masks.reduce((n, m) => n + bitCount(m), 0);
     this.resetMapState(false);
     this.briefT = 2.8;
+    this.sm.transition("playing");
+    this.audio.sfx("ui");
+    this.audio.startMusic();
+  }
+
+  /** 兼容旧存档：进入选关界面。 */
+  private continueGame(): void {
+    this.sm.transition("select");
   }
 
   /**
@@ -277,7 +303,9 @@ export class Game {
     if (!soft) {
       this.hasKey = false; this.keyTaken = false;
       this.leversPulled = levers.map(() => false);
-      this.shardsTaken = this.level.shards.map(() => false);
+      // 碎片从选关进度恢复（已拿的不再显示）
+      const mask = this.progress.masks[this.flatIdx] ?? 0;
+      this.shardsTaken = this.level.shards.map((_, i) => (mask & (1 << i)) !== 0);
       this.checkpointOn = false;
     }
     this.guards = guards.map((g) => ({
@@ -294,28 +322,21 @@ export class Game {
     this.particles.each((p) => (p.alive = false));
   }
 
-  /** 进入下一区 / 下一班 / 通关。 */
+  /** 交班：记录本图碎片与解锁，回选关；最后一图则总结算。 */
   private completeMap(): void {
     this.audio.sfx("door");
-    if (this.mapIndex + 1 < this.level.mapTotal) {
-      this.mapIndex++;
-    } else if (this.levelIndex + 1 < this.level.levelTotal) {
-      this.levelIndex++;
-      this.mapIndex = 0;
-    } else {
+    this.input.actions.clear(); // 清掉上一关残留的按键动作，避免误触选关导航
+    this.progress.unlocked = Math.min(totalMaps() - 1, Math.max(this.progress.unlocked, this.flatIdx + 1));
+    this.selectIdx = this.progress.unlocked;
+    this.writeProgress();
+    this.writeSave();
+    if (this.flatIdx >= totalMaps() - 1) {
       this.clearSave();
       this.toGameOver("win");
       return;
     }
-    this.level = loadLevel(this.levelIndex, this.mapIndex);
-    this.resetMapState(false);
-    this.writeSave(); // 换图即存档
-    this.briefT = 3.2;
-    this.glitchFrom = "B";
-    this.glitchT = GLITCH_TIME;
-    this.audio.sfx("win");
-    this.audio.setWorld("A");
-  }
+    this.sm.transition("select");
+    this.audio.sfx("win");  }
 
   private toGameOver(kind: EndKind): void {
     this.endKind = kind;
@@ -386,37 +407,31 @@ export class Game {
     switch (this.sm.state) {
       case "title": {
         this.runTime += dt;
-        const wantContinue = this.save
-          && (this.input.consumeAction("Enter") || this.input.consumeAction("TouchTapHigh"));
-        const wantNew = this.input.consumeAction("Space") || this.input.consumeAction("TouchTap")
-          || (!this.save && this.input.consumeAction("Enter"));
-        if (wantContinue) {
-          this.continueGame();
-          this.sm.transition("playing");
+        if (this.input.consumeAction("Space") || this.input.consumeAction("Enter") || this.input.consumeAction("TouchTap")) {
+          this.selectIdx = this.progress.unlocked;
+          this.sm.transition("select");
           this.audio.sfx("ui");
-          this.audio.startMusic();
-        } else if (wantNew) {
-          this.newGame();
-          this.sm.transition("playing");
-          this.audio.sfx("ui");
-          this.audio.startMusic();
         }
+        return;
+      }
+      case "select": {
+        this.runTime += dt;
+        this.updateSelect(dt);
         return;
       }
       case "playing": break;
       case "paused": {
         if (this.input.consumeAction("Escape")) { this.sm.transition("playing"); this.audio.sfx("ui"); }
         if (this.input.consumeAction("KeyR")) { this.resetMapState(false); this.briefT = 2; this.sm.transition("playing"); this.audio.sfx("ui"); }
+        if (this.input.consumeAction("KeyQ")) { this.sm.transition("select"); this.audio.stopMusic(); this.audio.sfx("ui"); }
         return;
       }
       case "gameover": {
         this.runTime += dt;
         if (this.input.consumeAction("Space") || this.input.consumeAction("Enter") || this.input.consumeAction("KeyR") || this.input.consumeAction("TouchTap")) {
-          if (this.endKind === "win") this.newGame();
-          else { this.resetMapState(true); this.briefT = 0; }
-          this.sm.transition("playing");
+          if (this.endKind === "win") { this.selectIdx = this.progress.unlocked; this.sm.transition("select"); }
+          else { this.resetMapState(true); this.briefT = 0; this.sm.transition("playing"); this.audio.startMusic(); }
           this.audio.sfx("ui");
-          this.audio.startMusic();
         }
         return;
       }
@@ -425,6 +440,7 @@ export class Game {
     // playing:
     if (this.input.consumeAction("Escape")) { this.sm.transition("paused"); this.audio.sfx("ui"); return; }
     if (this.input.consumeAction("KeyR")) { this.resetMapState(false); this.briefT = 2; this.audio.sfx("ui"); return; }
+    if (this.input.consumeAction("KeyQ")) { this.sm.transition("select"); this.audio.stopMusic(); this.audio.sfx("ui"); return; }
 
     // —— 时间换挡（键盘限定；里世界按住生效）——
     const wantSlow = this.input.isHeld("KeyK");
@@ -638,6 +654,8 @@ export class Game {
       if (aabb(this.px, this.py, PLAYER_W, PLAYER_H, s.x - 10, s.y - 10, 20, 20)) {
         this.shardsTaken[i] = true;
         this.shardsGrand++;
+        this.progress.masks[this.flatIdx] |= 1 << i;
+        this.writeProgress();
         this.audio.sfx("pickup");
         this.burst(s.x, s.y, 14, "#c8a2ff", 110);
         this.hint(`记忆碎片 ${this.shardsGrand}/${totalShards()}`, 2);
@@ -901,8 +919,7 @@ export class Game {
 
   // ---------------------------------------------------------------- 渲染
 
-  private render(): void {
-    const g = this.offCtx;
+  private render(): void {    const g = this.offCtx;
     const glitching = this.glitchT > 0;
     const shown: WorldId = glitching && this.glitchT > GLITCH_TIME / 2 ? this.glitchFrom : this.world;
     this.drawScene(g, shown);
@@ -1481,11 +1498,122 @@ export class Game {
     g.restore();
   }
 
+  /** 选关界面输入：方向键导航 + 空格进入 + 触屏点卡片。 */
+  private updateSelect(_dt: number): void {    const n = totalMaps();
+    if (this.input.consumeAction("Space") || this.input.consumeAction("Enter")) {      this.tryStartSelected();
+      return;
+    }
+    if (this.input.consumeAction("Escape")) { this.sm.transition("title"); return; }
+    if (this.input.consumeAction("ArrowRight") || this.input.consumeAction("KeyD")) this.selectIdx = Math.min(n - 1, this.selectIdx + 1);
+    if (this.input.consumeAction("ArrowLeft") || this.input.consumeAction("KeyA")) this.selectIdx = Math.max(0, this.selectIdx - 1);
+    if (this.input.consumeAction("ArrowDown") || this.input.consumeAction("KeyS")) this.selectIdx = Math.min(n - 1, this.selectIdx + 3);
+    if (this.input.consumeAction("ArrowUp") || this.input.consumeAction("KeyW")) this.selectIdx = Math.max(0, this.selectIdx - 3);
+    const tap = this.input.lastTap;
+    if (tap) {
+      this.input.lastTap = null;
+      const idx = this.hitCard(tap.x, tap.y);
+      if (idx >= 0) {
+        this.selectIdx = idx;
+        this.tryStartSelected();
+      }
+    }
+  }
+
+  private tryStartSelected(): void {    if (this.selectIdx > this.progress.unlocked) {
+      this.audio.sfx("denied");
+      return;
+    }
+    this.startMap(this.selectIdx);
+  }
+
+  private cardRect(i: number): { x: number; y: number; w: number; h: number } {
+    const cols = 3, gap = 24;
+    const w = Math.min(240, (this.vw - 96) / cols); // 窄屏自适应
+    const h = 104;
+    const totalW = cols * w + (cols - 1) * gap;
+    const x0 = (this.vw - totalW) / 2;
+    const y0 = Math.max(96, this.vh / 2 - 150);
+    return { x: x0 + (i % cols) * (w + gap), y: y0 + Math.floor(i / cols) * (h + gap), w, h };
+  }
+
+  private hitCard(clientX: number, clientY: number): number {
+    const rect = this.canvas.getBoundingClientRect();
+    const lx = (clientX - rect.left) * (this.vw / rect.width);
+    const ly = (clientY - rect.top) * (this.vh / rect.height);
+    for (let i = 0; i < totalMaps(); i++) {
+      const r = this.cardRect(i);
+      if (lx >= r.x && lx <= r.x + r.w && ly >= r.y && ly <= r.y + r.h) return i;
+    }
+    return -1;
+  }
+
+  private drawLevelSelect(ctx: CanvasRenderingContext2D): void {
+    const vw = this.vw;
+    const cx = vw / 2;
+    this.panel(ctx, 0.78);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#eef4fa";
+    ctx.font = "bold 26px monospace";
+    ctx.fillText("选择关卡", cx, 52);
+    ctx.font = "13px monospace";
+    ctx.fillStyle = "#9fb4c8";
+    const done = Math.min(this.progress.unlocked, totalMaps() - 1);
+    ctx.fillText(`已完成 ${done}/${totalMaps()} · 碎片 ${this.progress.masks.reduce((n, m) => n + bitCount(m), 0)}/${totalShards()}`, cx, 76);
+
+    for (let i = 0; i < totalMaps(); i++) {
+      const r = this.cardRect(i);
+      const locked = i > this.progress.unlocked;
+      const selected = i === this.selectIdx;
+      const mask = this.progress.masks[i];
+      const { level, map } = flatToLevelMap(i);
+      const name = mapTitle(level, map).split(" · ").pop() ?? "";
+
+      ctx.fillStyle = selected ? "rgba(30,48,66,0.95)" : "rgba(10,16,24,0.85)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = selected ? "#ffe9b0" : locked ? "rgba(255,255,255,0.12)" : "rgba(122,200,240,0.4)";
+      ctx.lineWidth = selected ? 2 : 1;
+      ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1);
+
+      ctx.textAlign = "left";
+      ctx.fillStyle = locked ? "rgba(255,255,255,0.2)" : "#7ac8f0";
+      ctx.font = "bold 30px monospace";
+      ctx.fillText(String(i + 1).padStart(2, "0"), r.x + 14, r.y + 38);
+      ctx.font = "14px monospace";
+      ctx.fillStyle = locked ? "rgba(255,255,255,0.25)" : "#dce8f2";
+      ctx.fillText(name, r.x + 14, r.y + 62);
+
+      if (locked) {
+        drawLock(ctx, r.x + r.w - 28, r.y + 24, 14, "rgba(255,255,255,0.3)");
+      } else {
+        // 碎片指示（3 枚）
+        for (let s = 0; s < 3; s++) {
+          iconSpark(ctx, r.x + 18 + s * 18, r.y + 86, 11, (mask & (1 << s)) !== 0 ? "#c8a2ff" : "rgba(255,255,255,0.2)");
+        }
+        // 评价（已通关的图）
+        if (i < this.progress.unlocked) {
+          const bits = bitCount(mask);
+          const rk = bits >= 3 ? "S" : bits >= 2 ? "A" : "B";
+          ctx.fillStyle = rk === "S" ? "#ffd27a" : rk === "A" ? "#7af0c8" : "#7ac8f0";
+          ctx.font = "bold 22px monospace";
+          ctx.textAlign = "right";
+          ctx.fillText(rk, r.x + r.w - 16, r.y + 34);
+        }
+      }
+    }
+
+    ctx.textAlign = "center";
+    ctx.font = "13px monospace";
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.fillText(IS_TOUCH ? "点选进入" : "方向键选择 · 空格进入 · Esc 返回", cx, Math.min(this.vh - 30, this.cardRect(totalMaps() - 1).y + 130));
+    ctx.textAlign = "left";
+  }
+
   // ---------------------------------------------------------------- HUD 与界面
 
   private drawHud(ctx: CanvasRenderingContext2D): void {
     switch (this.sm.state) {
       case "title": this.drawTitle(ctx); return;
+      case "select": this.drawLevelSelect(ctx); return;
       case "paused": this.drawPause(ctx); return;
       case "gameover": this.drawGameOver(ctx); return;
       case "playing": break;
@@ -1932,6 +2060,26 @@ function iconBolt(g: Ctx, x: number, y: number, s: number, color: string): void 
   g.lineTo(x + s * 0.3, y - s * 0.08);
   g.lineTo(x + s * 0.02, y - s * 0.08);
   g.closePath();
+  g.fill();
+  g.restore();
+}
+
+function bitCount(n: number): number {
+  let c = 0;
+  while (n) { c += n & 1; n >>= 1; }
+  return c;
+}
+
+/** 小挂锁（选关未解锁卡片用）。 */
+function drawLock(g: Ctx, x: number, y: number, s: number, color: string): void {
+  g.save();
+  g.strokeStyle = color;
+  g.lineWidth = s * 0.18;
+  g.beginPath();
+  g.arc(x, y - s * 0.1, s * 0.32, Math.PI, 0);
+  g.stroke();
+  g.fillStyle = color;
+  roundRectPath(g, x - s * 0.5, y - s * 0.05, s, s * 0.65, s * 0.14);
   g.fill();
   g.restore();
 }

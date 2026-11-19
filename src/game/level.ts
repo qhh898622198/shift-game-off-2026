@@ -385,6 +385,16 @@ export function mapFlatIndex(levelIndex: number, mapIndex: number): number {
   return n + mapIndex;
 }
 
+/** 全局图序号 → (班, 区)（选关制用）。 */
+export function flatToLevelMap(flat: number): { level: number; map: number } {
+  let n = flat;
+  for (let l = 0; l < RAW_LEVELS.length; l++) {
+    if (n < RAW_LEVELS[l].maps.length) return { level: l, map: n };
+    n -= RAW_LEVELS[l].maps.length;
+  }
+  throw new Error(`flat index out of range: ${flat}`);
+}
+
 /** 全部地图的记忆碎片总数（评价分母）。 */
 export function totalShards(): number {
   let n = 0;

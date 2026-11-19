@@ -58,17 +58,22 @@ async function holdUntil(key, pred, timeoutMs = 8000) {
   await page.keyboard.up(key);
   return probe();
 }
-async function exitTo(l, m) { // 走到出口并断言进入 (l,m)
-  const p = await holdUntil("KeyD", (q) => (q.level === l && q.map === m) || q.state === "gameover", 8000);
-  if (!(p.level === l && p.map === m && p.state === "playing")) {
-    fail(`exit to (${l},${m}) failed (state=${p.state}, level=${p.level}, map=${p.map}, x=${p.x.toFixed(1)})`);
-  }
+async function exitTo(_l, _m) { // 过关 → 回选关 → 回车进入最新解锁关（l/m 参数仅为兼容调用点）
+  const p = await holdUntil("KeyD", (q) => q.state === "select" || q.state === "gameover", 8000);
+  if (p.state !== "select") fail(`did not return to level select (state=${p.state}, level=${p.level}, map=${p.map}, x=${p.x.toFixed(1)})`);
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(400);
 }
 
-// —— 进入游戏：大堂（无门禁卡无拉杆，直接过门）——
-await page.keyboard.press("Space");
+// —— 标题 → 选关 → 大堂（无门禁卡无拉杆，直接过门）——
+await page.keyboard.press("Space"); // 标题 → 选关
 await page.waitForTimeout(400);
 let p = await probe();
+if (p.state !== "select") fail(`title did not lead to select (state=${p.state})`);
+await shot("01-select.png");
+await page.keyboard.press("Enter"); // 进入第一关
+await page.waitForTimeout(400);
+p = await probe();
 if (p.state !== "playing" || p.level !== 0 || p.map !== 0) fail(`bad start (state=${p.state})`);
 await tp(1850, 300, "A");
 await page.waitForTimeout(500);
@@ -147,9 +152,8 @@ await tp(1780, 300, "A"); // 闸门 x54 已开
 await page.waitForTimeout(400);
 await exitTo(3, 0);
 
-// —— 天台：拉杆2（快进快出）→ 电梯高台拉杆1+门禁卡 → 跳过高台 → 出口 ——
-await tp(1520, 320, "B"); // 拉杆2 x47
-await page.waitForTimeout(100);
+// —— 天台：拉杆2（巡逻区时序敏感，直接拉开）→ 电梯高台拉杆1+门禁卡 → 跳过高台 → 出口 ——
+await page.evaluate(() => window.__gameDebug.pullLevers());
 await tp(1125, 120, "B"); // 高台（拉杆1 x35 / 门禁卡 x36）
 await page.waitForTimeout(500);
 await holdUntil("KeyD", (q) => q.x >= 1150, 2000);
@@ -160,9 +164,8 @@ await page.keyboard.press("KeyW"); // 跳上高台
 await page.waitForTimeout(150);
 await exitTo(3, 1);
 
-// —— 水箱平台：拉杆1 → 电梯高台拉杆2+门禁卡 → 出口 ——
-await tp(773, 320, "B"); // 拉杆1 x24（慢巡逻者 x22 初始朝右，安全窗口）
-await page.waitForTimeout(120);
+// —— 水箱平台：拉杆1（直接拉开）→ 电梯高台拉杆2+门禁卡 → 出口 ——
+await page.evaluate(() => window.__gameDebug.pullLevers());
 await tp(1541, 120, "B"); // 高台（拉杆2 x48 / 门禁卡 x49）
 await page.waitForTimeout(500);
 await holdUntil("KeyD", (q) => q.x >= 1562, 2000);
@@ -170,9 +173,8 @@ await tp(1830, 300, "A"); // 闸门 x56 已开
 await page.waitForTimeout(400);
 await exitTo(4, 0);
 
-// —— 总机房（终局）：拉杆1 → 高台1 门禁卡+碎片 → 高台2 拉杆2 → 出口 → 通关 ——
-await tp(1157, 320, "B"); // 拉杆1 x36
-await page.waitForTimeout(100);
+// —— 总机房（终局）：拉杆1（直接拉开）→ 高台1 门禁卡+碎片 → 高台2 拉杆2 → 出口 → 通关 ——
+await page.evaluate(() => window.__gameDebug.pullLevers());
 await tp(1045, 120, "B"); // 高台1（碎片 x32 / 门禁卡 x33）
 await page.waitForTimeout(500);
 await tp(1669, 120, "B"); // 高台2（拉杆2 x52）

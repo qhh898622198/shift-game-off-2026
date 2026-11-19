@@ -102,6 +102,7 @@ export class Input {
       if (start) {
         this.actions.add("TouchTap"); // 标题/结算界面：轻点任意处 = 确认
         this.actions.add(t.clientY < window.innerHeight / 2 ? "TouchTapHigh" : "TouchTapLow"); // 上下半屏 = 两个选项
+        this.lastTap = { x: t.clientX, y: t.clientY };
         if (t.clientX < w / 2 && this.touchMoveId === null) {
           this.touchMoveId = t.identifier;
           this.touchMoveOrigin = { x: t.clientX, y: t.clientY };
@@ -163,6 +164,9 @@ export class Input {
     this.pitchDelta = 0;
     return r;
   }
+
+  /** 最近一次触摸点（客户端坐标）——选关网格命中检测用。 */
+  lastTap: { x: number; y: number } | null = null;
 
   /** Consume an instantaneous action: was this key pressed during the current frame. */
   consumeAction(code: string): boolean {

@@ -18,11 +18,12 @@ declare global {
     __gameProbe?: () => { x: number; y: number; z: number };
     /** 就绪信号 —— 自检脚本等到它再截图/断言。 */
     __GAME_READY__?: boolean;
-    /** 自检脚本专用调试接口（瞬移/给钥匙/调神智）。 */
+    /** 自检脚本专用调试接口（瞬移/给钥匙/调神智/拉杆）。 */
     __gameDebug?: {
       teleport: (x: number, y: number, world?: "A" | "B") => void;
       giveKey: () => void;
       setSan: (v: number) => void;
+      pullLevers: () => void;
     };
   }
 }
@@ -62,6 +63,7 @@ export function startGame(canvas: HTMLCanvasElement): void {
     teleport: (x, y, world) => game.debugTeleport(x, y, world),
     giveKey: () => game.debugGiveKey(),
     setSan: (v) => game.debugSetSan(v),
+    pullLevers: () => game.debugPullLevers(),
   };
 
   session = {

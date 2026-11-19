@@ -3,13 +3,14 @@
  * Each state has enter/exit hooks; illegal transitions throw immediately (surfacing flow holes early).
  */
 
-export type GameState = "title" | "playing" | "paused" | "gameover";
+export type GameState = "title" | "select" | "playing" | "paused" | "gameover";
 
 const TRANSITIONS: Record<GameState, readonly GameState[]> = {
-  title: ["playing"],
-  playing: ["paused", "gameover", "title"],
+  title: ["select", "playing"],
+  select: ["playing", "title"],
+  playing: ["paused", "gameover", "title", "select"],
   paused: ["playing", "title"],
-  gameover: ["playing", "title"],
+  gameover: ["playing", "title", "select"],
 };
 
 export class GameStateMachine {

@@ -176,8 +176,10 @@ switch (shot.kind) {
 }
 await page.screenshot({ path: join(SHOTS, "01-title.png") });
 
-// 2) Enter playing
+// 2) Enter playing（标题 → 选关 → 回车进入第一关）
 await page.keyboard.press("Space");
+await page.waitForTimeout(300);
+await page.keyboard.press("Enter");
 await page.waitForTimeout(400);
 
 // 3) Direction assertions (2D platformer mapping — synced with src/game/input.ts):

@@ -45,11 +45,23 @@ const probe = () => page.evaluate(() => window.__gameProbe());
 const btnCount = await page.locator(".touch-btn").count();
 if (btnCount < 6) fail(`touch buttons not rendered (found ${btnCount})`);
 
-// 1) 轻点屏幕中央 → 开始
-await page.touchscreen.tap(187, 400); // iPhone13 视口 390x844 的中央偏下（避开按键）
+// 1) 轻点屏幕中央 → 进入选关；再点第 1 关卡片 → 开始
+await page.touchscreen.tap(187, 400); // iPhone13 视口的中央偏下（避开按键）
 await page.waitForTimeout(400);
 let p = await probe();
-if (p.state !== "playing") fail(`tap did not start the game (state=${p.state})`);
+if (p.state !== "select") fail(`tap did not lead to select (state=${p.state})`);
+const tapPos = await page.evaluate(() => {
+  const w = innerWidth, h = innerHeight;
+  const vw = 640, vh = 640 / (w / h);
+  const cardW = (640 - 96) / 3, totalW = 3 * cardW + 48;
+  const x0 = (640 - totalW) / 2, y0 = Math.max(96, vh / 2 - 150);
+  const cx = x0 + cardW / 2, cy = y0 + 52;
+  return { x: cx * (w / vw), y: cy * (h / vh) };
+});
+await page.touchscreen.tap(tapPos.x, tapPos.y);
+await page.waitForTimeout(400);
+p = await probe();
+if (p.state !== "playing") fail(`tap on card did not start the game (state=${p.state})`);
 
 // 2) 按住「右移」→ 向右移动
 const right = page.getByRole("button", { name: "右移" });

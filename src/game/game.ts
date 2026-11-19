@@ -16,6 +16,7 @@ import { GameStateMachine } from "./state";
 import { AudioSystem } from "./audio";
 import { storage } from "./storage";
 import { Pool, type Poolable } from "./types";
+import { t, t as tText, tf, toggleLang, mapName, getLang } from "./i18n";
 import {
   loadLevel, mapTitle, mapFlatIndex, totalMaps, flatToLevelMap, totalShards, TILE, LEVEL_W, LEVEL_H, LEVEL_PX_W, LEVEL_PX_H,
   type WorldId, type LevelData,
@@ -354,10 +355,21 @@ export class Game {
     this.sm.transition("gameover");
   }
 
+  /** 双语区域全名（任务卡/结算用）。 */
+  private fullTitle(): string {
+    const zh = mapTitle(this.levelIndex, this.mapIndex);
+    if (getLang() !== "en") return zh;
+    const parts = zh.split(" · ");
+    const enShift = ({ 第一班: "Shift 1", 第二班: "Shift 2", 第三班: "Shift 3", 第四班: "Shift 4", 第五班: "Shift 5" } as Record<string, string>)[parts[0]] ?? parts[0];
+    const enArea = ({ 办公楼: "Office", 地下设施: "Underground", 档案室: "Archives", 天台区: "Rooftops", 总机房: "Mainframe" } as Record<string, string>)[parts[1]] ?? parts[1];
+    return `${enShift} · ${enArea} · ${mapName(parts[2] ?? "")}`;
+  }
+
   private hint(text: string, t = 2.2): void {
-    const h = this.hints.find((x) => x.text === text);
+    const translated = tText(text);
+    const h = this.hints.find((x) => x.text === translated);
     if (h) h.t = Math.max(h.t, t);
-    else this.hints.push({ text, t });
+    else this.hints.push({ text: translated, t });
   }
 
   private get leverCount(): number {
@@ -386,16 +398,16 @@ export class Game {
 
   private objectives(): Array<{ done: boolean; label: string }> {
     const list: Array<{ done: boolean; label: string }> = [];
-    if (this.needsKey) list.push({ done: this.hasKey, label: "找到门禁卡（里世界）" });
+    if (this.needsKey) list.push({ done: this.hasKey, label: t("找到门禁卡（里世界）") });
     if (this.level.levers.length > 0) {
       list.push({
         done: this.gateOpen,
         label: this.level.levers.length > 1
-          ? `拉开闸门（里世界 ${this.leverCount}/${this.level.levers.length} 个拉杆）`
-          : "拉开闸门（里世界的拉杆）",
+          ? tf("拉开闸门（里世界 {0}/{1} 个拉杆）", this.leverCount, this.level.levers.length)
+          : t("拉开闸门（里世界的拉杆）"),
       });
     }
-    list.push({ done: false, label: "到出口交班" });
+    list.push({ done: false, label: t("到出口交班") });
     return list;
   }
 
@@ -403,6 +415,20 @@ export class Game {
 
   private update(dt: number): void {
     if (this.input.consumeAction("KeyM")) this.audio.toggleMute();
+    if (this.input.consumeAction("KeyL")) toggleLang();
+    if (this.sm.state === "title" && this.input.lastTap) {
+      // 标题右上角的中/EN 切换按钮
+      const rect = this.canvas.getBoundingClientRect();
+      const tap = this.input.lastTap;
+      const lx = (tap.x - rect.left) * (this.vw / rect.width);
+      const ly = (tap.y - rect.top) * (this.vh / rect.height);
+      if (lx > this.vw - 110 && ly < 44) {
+        toggleLang();
+        this.input.lastTap = null;
+        return;
+      }
+      this.input.lastTap = null;
+    }
 
     switch (this.sm.state) {
       case "title": {
@@ -447,7 +473,7 @@ export class Game {
     this.slowmo = wantSlow && this.world === "B";
     if (wantSlow && this.world === "A" && !this.slowmoHintShown) {
       this.slowmoHintShown = true;
-      this.hint("现实不为所动——只有里世界的时间能被拨动", 2.4);
+      this.hint(t("现实不为所动——只有里世界的时间能被拨动"), 2.4);
     }
     const dtg = this.slowmo ? dt * SLOWMO_SCALE : dt;
     this.runTime += dtg;
@@ -469,7 +495,7 @@ export class Game {
       this.san -= SAN_DRAIN * (this.slowmo ? SLOWMO_SAN_MULT : 1) * dt;
       if (this.san < 30 && !this.lowSanWarned) {
         this.lowSanWarned = true;
-        this.hint("神智快见底了——回现实喘口气", 2.4);
+        this.hint(t("神智快见底了——回现实喘口气"), 2.4);
       }
       if (this.san <= 0) {
         this.san = 0;
@@ -584,7 +610,7 @@ export class Game {
         this.checkpointOn = true;
         this.audio.sfx("key");
         this.burst(c.x + 11, c.y, 12, "#58e08a", 90);
-        this.hint("存档点已激活——死了从这里复活", 2.4);
+        this.hint(t("存档点已激活——死了从这里复活"), 2.4);
       }
     }
 
@@ -608,7 +634,7 @@ export class Game {
         g.alertT = CHASE_TIME;
         this.audio.sfx("alert");
         this.shake = 0.25;
-        this.hint("它看到你了——跑！", 1.6);
+        this.hint(t("它看到你了——跑！"), 1.6);
         if (!g.alertedOnce) g.alertedOnce = true;
       }
       if (aabb(this.px, this.py, PLAYER_W, PLAYER_H, g.x, g.y, GUARD_W, GUARD_H)) {
@@ -629,8 +655,8 @@ export class Game {
           const total = this.level.levers.length;
           this.hint(
             this.leverCount >= total
-              ? "远处传来闸门升起的声音——回到现实"
-              : `闸门机关 ${this.leverCount}/${total}——还有拉杆没拉`,
+              ? t("远处传来闸门升起的声音——回到现实")
+              : tf("闸门机关 {0}/{1}——还有拉杆没拉", this.leverCount, total),
             2.8,
           );
         }
@@ -644,7 +670,7 @@ export class Game {
         this.keyTaken = true; this.hasKey = true;
         this.audio.sfx("key");
         this.burst(k.x, k.y, 16, "#7af0c8", 120);
-        this.hint("拿到门禁卡了——回到现实，去出口", 2.8);
+        this.hint(t("拿到门禁卡了——回到现实，去出口"), 2.8);
       }
     }
 
@@ -658,7 +684,7 @@ export class Game {
         this.writeProgress();
         this.audio.sfx("pickup");
         this.burst(s.x, s.y, 14, "#c8a2ff", 110);
-        this.hint(`记忆碎片 ${this.shardsGrand}/${totalShards()}`, 2);
+        this.hint(tf("记忆碎片 {0}/{1}", this.shardsGrand, totalShards()), 2);
       }
     });
 
@@ -667,8 +693,8 @@ export class Game {
       const d = this.level.door;
       const dx = d.tx * TILE, dy = d.ty0 * TILE;
       if (aabb(this.px, this.py, PLAYER_W, PLAYER_H, dx - 4, dy, TILE + 8, (d.ty1 - d.ty0 + 1) * TILE)) {
-        if (!this.gateOpen) this.hint("闸门纹丝不动——开关不在这个世界", 1.4);
-        else if (this.needsKey && !this.hasKey) this.hint("门锁着。需要一张门禁卡——它不在这个世界", 1.4);
+        if (!this.gateOpen) this.hint(t("闸门纹丝不动——开关不在这个世界"), 1.4);
+        else if (this.needsKey && !this.hasKey) this.hint(t("门锁着。需要一张门禁卡——它不在这个世界"), 1.4);
         else {
           this.completeMap();
           return;
@@ -807,7 +833,7 @@ export class Game {
     if (this.collides(this.px, this.py, PLAYER_W, PLAYER_H, target)) {
       this.denyFlash = 0.35;
       this.audio.sfx("denied");
-      this.hint("对面是一堵墙——这里切不过去", 1.6);
+      this.hint(t("对面是一堵墙——这里切不过去"), 1.6);
       this.shiftCd = 0.25;
       return;
     }
@@ -820,7 +846,7 @@ export class Game {
     this.audio.setWorld(target);
     if (target === "B" && !this.firstShiftB) {
       this.firstShiftB = true;
-      this.hint(IS_TOUCH ? "里世界会消耗神智——快进快出" : "里世界会消耗神智——快进快出，按住 K 可以拨慢时间", 3.2);
+      this.hint(t(IS_TOUCH ? "里世界会消耗神智——快进快出" : "里世界会消耗神智——快进快出，按住 K 可以拨慢时间"), 3.2);
     }
     const cx = this.px + PLAYER_W / 2, cy = this.py + PLAYER_H / 2;
     this.burst(cx, cy, 20, target === "B" ? "#ff6a4a" : "#7ac8f0", 160);
@@ -1554,11 +1580,11 @@ export class Game {
     ctx.textAlign = "center";
     ctx.fillStyle = "#eef4fa";
     ctx.font = "bold 26px monospace";
-    ctx.fillText("选择关卡", cx, 52);
+    ctx.fillText(t("选择关卡"), cx, 52);
     ctx.font = "13px monospace";
     ctx.fillStyle = "#9fb4c8";
     const done = Math.min(this.progress.unlocked, totalMaps() - 1);
-    ctx.fillText(`已完成 ${done}/${totalMaps()} · 碎片 ${this.progress.masks.reduce((n, m) => n + bitCount(m), 0)}/${totalShards()}`, cx, 76);
+    ctx.fillText(tf("已完成 {0}/{1} · 碎片 {2}/{3}", done, totalMaps(), this.progress.masks.reduce((n, m) => n + bitCount(m), 0), totalShards()), cx, 76);
 
     for (let i = 0; i < totalMaps(); i++) {
       const r = this.cardRect(i);
@@ -1566,7 +1592,7 @@ export class Game {
       const selected = i === this.selectIdx;
       const mask = this.progress.masks[i];
       const { level, map } = flatToLevelMap(i);
-      const name = mapTitle(level, map).split(" · ").pop() ?? "";
+      const name = mapName(mapTitle(level, map).split(" · ").pop() ?? "");
 
       ctx.fillStyle = selected ? "rgba(30,48,66,0.95)" : "rgba(10,16,24,0.85)";
       ctx.fillRect(r.x, r.y, r.w, r.h);
@@ -1604,7 +1630,7 @@ export class Game {
     ctx.textAlign = "center";
     ctx.font = "13px monospace";
     ctx.fillStyle = "rgba(255,255,255,0.45)";
-    ctx.fillText(IS_TOUCH ? "点选进入" : "方向键选择 · 空格进入 · Esc 返回", cx, Math.min(this.vh - 30, this.cardRect(totalMaps() - 1).y + 130));
+    ctx.fillText(t(IS_TOUCH ? "点选进入" : "方向键选择 · 空格进入 · Esc 返回"), cx, Math.min(this.vh - 30, this.cardRect(totalMaps() - 1).y + 130));
     ctx.textAlign = "left";
   }
 
@@ -1629,23 +1655,22 @@ export class Game {
     ctx.fillText(fmtTime(this.time), cx, 26);
     {
       const nextLever = this.level.levers.find((_, i) => !this.leversPulled[i]);
-      const t = this.needsKey && !this.hasKey
-        ? { x: this.level.keycard.x, w: "B" as WorldId, label: "门禁卡" }
+      const target = this.needsKey && !this.hasKey
+        ? { x: this.level.keycard.x, w: "B" as WorldId, label: t("门禁卡") }
         : nextLever
-          ? { x: nextLever.x, w: "B" as WorldId, label: "拉杆" }
-          : { x: this.level.door.tx * TILE, w: "A" as WorldId, label: "出口" };
-      const dx = t.x - this.px;
+          ? { x: nextLever.x, w: "B" as WorldId, label: t("拉杆") }
+          : { x: this.level.door.tx * TILE, w: "A" as WorldId, label: t("出口") };      const dx = target.x - this.px;
       if (Math.abs(dx) > 100) {
         ctx.fillStyle = "rgba(255,233,176,0.85)";
         ctx.font = "13px monospace";
-        const txt = t.label;
+        const txt = target.label;
         const tx = cx + (dx > 0 ? 60 : -60);
         ctx.fillText(txt, tx, 46);
         const tw = ctx.measureText(txt).width;
         const iconX = tx + (dx > 0 ? tw / 2 + 14 : -(tw / 2 + 14));
-        if (t.w !== this.world) {
+        if (target.w !== this.world) {
           // 目标在对面世界：用月亮/眼睛图标表示，不写文字
-          if (t.w === "B") iconEye(ctx, iconX, 42, 13, "#ff6a4a");
+          if (target.w === "B") iconEye(ctx, iconX, 42, 13, "#ff6a4a");
           else iconMoon(ctx, iconX, 42, 12, "#7ac8f0");
           iconChevron(ctx, iconX + (dx > 0 ? 14 : -14), 42, 11, "rgba(255,233,176,0.9)", dx > 0 ? 1 : -1);
         } else {
@@ -1658,20 +1683,20 @@ export class Game {
       iconEye(ctx, cx - 62, 60, 20, "#ff3a2a", "#2a0505");
       ctx.fillStyle = "#ff3a2a";
       ctx.font = "bold 18px monospace";
-      ctx.fillText("被盯上了！", cx + 8, 66);
+      ctx.fillText(t("被盯上了！"), cx + 8, 66);
     }
     if (this.slowmo) {
       iconClock(ctx, cx - 52, 78, 15, "#7ac8f0");
       ctx.fillStyle = "#7ac8f0";
       ctx.font = "13px monospace";
-      ctx.fillText("时间 ×0.45", cx + 8, 84);
+      ctx.fillText(t("时间 ×0.45"), cx + 8, 84);
     }
 
     // 左上：区域名 + 进度点 + 世界图标（文字能省则省）
     ctx.textAlign = "left";
     ctx.font = "13px monospace";
     ctx.fillStyle = "rgba(255,255,255,0.55)";
-    ctx.fillText(this.level.mapName, 14, 24);
+    ctx.fillText(mapName(this.level.mapName), 14, 24);
     const flatIdx = mapFlatIndex(this.levelIndex, this.mapIndex);
     const totalMapsN = totalMaps();
     for (let i = 0; i < totalMapsN; i++) {
@@ -1717,10 +1742,10 @@ export class Game {
       const a = Math.min(1, this.briefT / 0.6, (3.2 - this.briefT) / 0.3);
       ctx.globalAlpha = Math.max(0, Math.min(1, a));
       const briefs: string[] = [];
-      if (this.needsKey) briefs.push("门禁卡 · 里世界");
-      if (this.level.levers.length > 1) briefs.push(`拉杆 ×${this.level.levers.length} · 里世界`);
-      else if (this.level.levers.length === 1) briefs.push("拉杆 · 里世界");
-      briefs.push("出口 · 交班");
+      if (this.needsKey) briefs.push(t("门禁卡 · 里世界"));
+      if (this.level.levers.length > 1) briefs.push(tf("拉杆 ×{0} · 里世界", this.level.levers.length));
+      else if (this.level.levers.length === 1) briefs.push(t("拉杆 · 里世界"));
+      briefs.push(t("出口 · 交班"));
       const w = 320, h = 44 + briefs.length * 30 + 14;
       const x = (vw - w) / 2, y = Math.max(80, vh / 2 - 150);
       ctx.fillStyle = "rgba(5,8,12,0.82)";
@@ -1730,7 +1755,7 @@ export class Game {
       ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
       ctx.fillStyle = "#9fb4c8";
       ctx.font = "14px monospace";
-      ctx.fillText(mapTitle(this.levelIndex, this.mapIndex), cx, y + 28);
+      ctx.fillText(this.fullTitle(), cx, y + 28);
       ctx.font = "15px monospace";
       briefs.forEach((l, i) => {
         ctx.fillStyle = "#c8d6e4";
@@ -1788,6 +1813,11 @@ export class Game {
     const vw = this.vw, vh = this.vh;
     const cx = vw / 2;
     this.panel(ctx, 0.72);
+    // 右上角中/EN 切换
+    ctx.textAlign = "right";
+    ctx.font = "13px monospace";
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.fillText("EN / 中", vw - 16, 28);
     ctx.textAlign = "center";
     const flick = Math.random() < 0.08;
     ctx.font = "bold 84px monospace";
@@ -1821,16 +1851,13 @@ export class Game {
       const saveLabel = mapTitle(this.save.l, this.save.m);
       ctx.fillStyle = blinkOn ? "#7af0c8" : "#3f7a5f";
       ctx.font = "18px monospace";
-      ctx.fillText(
-        IS_TOUCH ? `上屏 · 继续（${saveLabel}）` : `Enter · 继续（${saveLabel}）`,
-        cx, 320,
-      );
+      ctx.fillText(tf(IS_TOUCH ? "上屏 · 继续（{0}）" : "Enter · 继续（{0}）", saveLabel), cx, 320);
       ctx.fillStyle = blinkOn ? "#ffe9b0" : "#8a7f5a";
-      ctx.fillText(IS_TOUCH ? "下屏 · 新一夜" : "空格 · 新一夜", cx, 354);
+      ctx.fillText(t(IS_TOUCH ? "下屏 · 新一夜" : "空格 · 新一夜"), cx, 354);
     } else {
       ctx.fillStyle = blinkOn ? "#ffe9b0" : "#8a7f5a";
       ctx.font = "18px monospace";
-      ctx.fillText(IS_TOUCH ? "轻点屏幕 开始" : "按 空格 开始", cx, 340);
+      ctx.fillText(t(IS_TOUCH ? "轻点屏幕 开始" : "按 空格 开始"), cx, 340);
     }
     if (this.best > 0) {
       ctx.fillStyle = "rgba(122,240,200,0.55)";
@@ -1860,7 +1887,7 @@ export class Game {
     if (this.endKind === "win") {
       ctx.fillStyle = "#7af0c8";
       ctx.font = "bold 44px monospace";
-      ctx.fillText("天亮了", cx, 180);
+      ctx.fillText(t("天亮了"), cx, 180);
       const r = this.rank();
       const rc = r === "S" ? "#ffd27a" : r === "A" ? "#7af0c8" : "#7ac8f0";
       ctx.fillStyle = rc;
@@ -1868,12 +1895,12 @@ export class Game {
       ctx.fillText(r, cx, 265);
       ctx.font = "16px monospace";
       ctx.fillStyle = "#c8d6e4";
-      ctx.fillText(`${this.level.levelTotal} 班全勤 · 碎片 ${this.shardsGrand}/${totalShards()} · 用时 ${fmtTime(this.time)}（不计评价）`, cx, 305);
+      ctx.fillText(tf("{0} 班全勤 · 碎片 {1}/{2} · 用时 {3}（不计评价）", this.level.levelTotal, this.shardsGrand, totalShards(), fmtTime(this.time)), cx, 305);
     } else {
       const msg = {
-        caught: ["你被看到了", "里世界的东西不喜欢被打扰。"],
-        fell: ["你坠入了夹缝", "两个世界之间的缝，比看起来深。"],
-        consumed: ["你被里世界留下了", "神智见底的时候，现实就再也回不去了。"],
+        caught: [t("你被看到了"), t("里世界的东西不喜欢被打扰。")],
+        fell: [t("你坠入了夹缝"), t("两个世界之间的缝，比看起来深。")],
+        consumed: [t("你被里世界留下了"), t("神智见底的时候，现实就再也回不去了。")],
       }[this.endKind];
       ctx.fillStyle = "#ff5a4a";
       ctx.font = "bold 44px monospace";
@@ -1882,15 +1909,15 @@ export class Game {
       ctx.fillStyle = "#c8d6e4";
       ctx.fillText(msg[1], cx, 250);
       ctx.fillStyle = "#9fb4c8";
-      const revive = this.checkpointOn ? "从存档点复活，门禁卡和拉杆保留" : "从本区入口重来";
-      ctx.fillText(`倒在 ${mapTitle(this.levelIndex, this.mapIndex)} · ${revive}`, cx, 282);
+      const revive = this.checkpointOn ? t("从存档点复活，门禁卡和拉杆保留") : t("从本区入口重来");
+      ctx.fillText(tf("倒在 {0} · {1}", this.fullTitle(), revive), cx, 282);
     }
     ctx.fillStyle = Math.sin(this.runTime * 4) > 0 ? "#ffe9b0" : "#8a7f5a";
     ctx.font = "17px monospace";
     ctx.fillText(
       this.endKind === "win"
-        ? (IS_TOUCH ? "轻点屏幕 再上一夜" : "按 空格 再上一夜")
-        : (IS_TOUCH ? "轻点屏幕 继续" : "按 空格 继续"),
+        ? t(IS_TOUCH ? "轻点屏幕 再上一夜" : "按 空格 再上一夜")
+        : t(IS_TOUCH ? "轻点屏幕 继续" : "按 空格 继续"),
       cx, 340,
     );
     ctx.textAlign = "left";
